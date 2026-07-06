@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LLM Safety Testing &amp; Risk Analysis System — Risk Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  :root{
+    --bg: #0b0f14;
+    --panel: #131922;
+    --panel-2: #0f141b;
+    --border: #232b36;
+    --text: #e6edf3;
+    --text-dim: #8b96a5;
+    --safe: #3ddc84;
+    --borderline: #f5a623;
+    --unsafe: #ef4444;
+    --overrefusal: #6e7bf2;
+    --amber: #f5a623;
+    --mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
+    --sans: 'Inter', -apple-system, sans-serif;
+    --disp: 'Space Grotesk', 'Inter', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--sans); min-height:100vh; position:relative;
+  }
+  /* Slow-drifting aurora glow behind the whole page -- purely decorative,
+     built from the same status colors already used for the risk labels
+     (safe/borderline/unsafe/overrefusal) so it reads as "this app," not a
+     generic template background. Fixed + blurred + behind everything
+     (z-index:-1), so it never interferes with layout or scroll. */
+  body::before{
+    content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+    background-image:
+      radial-gradient(circle at 15% 0%, rgba(245,166,35,0.16), transparent 42%),
+      radial-gradient(circle at 85% 8%, rgba(110,123,242,0.13), transparent 42%),
+      radial-gradient(circle at 50% 100%, rgba(61,220,132,0.09), transparent 48%),
+      radial-gradient(circle at 90% 90%, rgba(239,68,68,0.05), transparent 40%);
+    background-repeat:no-repeat;
+    background-size:160% 160%;
+    filter:blur(60px) saturate(115%);
+    animation:aurora-drift 22s ease-in-out infinite alternate;
+    will-change:background-position, transform;
+  }
+  @keyframes aurora-drift{
+    0%   { background-position: 0% 0%,   100% 0%,  50% 100%, 100% 100%; transform:scale(1);}
+    50%  { background-position: 15% 10%, 85% 15%,  45% 90%,  90% 85%;  transform:scale(1.04);}
+    100% { background-position: 5% 15%,  95% 5%,   55% 100%, 95% 95%;  transform:scale(1.02);}
+  }
+  @media (prefers-reduced-motion: reduce){
+    body::before{ animation:none; }
+  }
+  header{
+    padding:28px clamp(16px,4vw,36px) 20px; border-bottom:1px solid var(--border);
+    display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:16px;
+    position:sticky; top:0; z-index:10;
+    background:rgba(11,15,20,0.72); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  }
+  .brand{display:flex; align-items:center; gap:12px;}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--safe);box-shadow:0 0 8px var(--safe); animation:pulse 2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
+  @keyframes fadeUp{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);}}
+  @keyframes growBar{from{width:0;} to{width:var(--target-width,100%);}}
+  h1{font-family:var(--disp); font-size:clamp(17px,2.4vw,22px); font-weight:600; margin:0; letter-spacing:0.5px;}
+  .tag{font-family:var(--mono); font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1.5px;}
+  .meta{font-family:var(--mono); font-size:12px; color:var(--text-dim); text-align:right;}
+  .meta span{color:var(--text);}
+  .banner{
+    background:rgba(139,150,165,0.10); border:1px solid rgba(139,150,165,0.4);
+    color:var(--text); font-family:var(--mono); font-size:12px; padding:10px clamp(16px,4vw,36px);
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;
+  }
+  .banner.live{background:rgba(61,220,132,0.08); border-color:rgba(61,220,132,0.35); color:var(--safe);}
+  .banner button, .filebtn{
+    background:var(--panel); border:1px solid var(--border); color:var(--text);
+    font-family:var(--mono); font-size:11px; padding:6px 12px; border-radius:4px; cursor:pointer;
+  }
+  .banner button:hover, .filebtn:hover{border-color:var(--amber);}
+  main{padding:28px clamp(16px,4vw,36px) 60px; max-width:1400px; margin:0 auto;}
+
+  .kpi-row{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:28px;}
+  .kpi{
+    background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:18px 20px;
+    position:relative; overflow:hidden; animation:fadeUp .35s ease-out backwards;
+  }
+  .kpi::before{content:''; position:absolute; left:0; top:0; bottom:0; width:3px;}
+  .kpi.safe::before{background:var(--safe);} .kpi.borderline::before{background:var(--borderline);}
+  .kpi.unsafe::before{background:var(--unsafe);} .kpi.over::before{background:var(--overrefusal);}
+  .kpi-label{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-dim); margin-bottom:8px;}
+  .kpi-value{font-family:var(--disp); font-size:clamp(24px,3.2vw,32px); font-weight:600;}
+  .kpi-sub{font-family:var(--mono); font-size:11px; color:var(--text-dim); margin-top:4px;}
+
+  .section-title{font-family:var(--disp); font-size:15px; font-weight:600; margin:0 0 14px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .section-title .n{font-family:var(--mono); font-size:11px; color:var(--text-dim); font-weight:400;}
+
+  .grid-2{display:grid; grid-template-columns:1.3fr 1fr; gap:20px; margin-bottom:28px;}
+  @media (max-width:980px){.grid-2{grid-template-columns:1fr;} .kpi-row{grid-template-columns:repeat(2,1fr);}}
+  @media (max-width:520px){.kpi-row{grid-template-columns:1fr;}}
+
+  .panel{background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:22px; animation:fadeUp .4s ease-out backwards;}
+  @media (max-width:600px){.panel{padding:16px;}}
+
+  /* Heatmap — the signature element: a sensor-grid console readout */
+  .heatmap-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:-2px; padding:2px;}
+  .heatmap-hint{display:none; font-family:var(--mono); font-size:10px; color:var(--text-dim); margin-bottom:8px;}
+  @media (max-width:700px){.heatmap-hint{display:block;}}
+  .heatmap{width:100%; min-width:520px; border-collapse:separate; border-spacing:4px; font-family:var(--mono); font-size:11px;}
+  .heatmap th{color:var(--text-dim); font-weight:400; text-align:center; padding:6px 4px; font-size:10px; text-transform:uppercase; letter-spacing:0.5px;}
+  .heatmap td.rowlabel{color:var(--text); text-align:right; padding-right:10px; white-space:nowrap; font-size:11px;}
+  .cell{
+    text-align:center; padding:14px 6px; border-radius:4px; position:relative;
+    border:1px solid rgba(255,255,255,0.06); transition:transform .15s, box-shadow .15s; cursor:pointer;
+  }
+  .cell:hover{transform:scale(1.06); z-index:2; box-shadow:0 0 0 1px var(--text-dim);}
+  .cell.selected{outline:2px solid var(--amber); outline-offset:1px;}
+  .cell .pct{font-weight:600; font-size:13px; display:block;}
+  .cell .cnt{font-size:9px; opacity:0.7; display:block; margin-top:2px;}
+
+  /* bar chart */
+  .bars{display:flex; flex-direction:column; gap:14px;}
+  .bar-row{display:grid; grid-template-columns:150px 1fr 40px; align-items:center; gap:10px; cursor:pointer; border-radius:4px; padding:4px; margin:-4px; transition:background .15s;}
+  .bar-row:hover{background:rgba(255,255,255,0.03);}
+  .bar-row.active .lbl{color:var(--amber);}
+  @media (max-width:560px){.bar-row{grid-template-columns:96px 1fr 34px; gap:6px;}}
+  .bar-row .lbl{font-family:var(--mono); font-size:11px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .bar-track{height:20px; background:var(--panel-2); border-radius:3px; overflow:hidden; display:flex; border:1px solid var(--border);}
+  .bar-seg{height:100%; animation:growBar .5s ease-out backwards;}
+  .bar-row .val{font-family:var(--mono); font-size:11px; text-align:right;}
+
+  .legend{display:flex; gap:16px; flex-wrap:wrap; margin-top:16px; font-family:var(--mono); font-size:10px; color:var(--text-dim);}
+  .legend span{display:inline-flex; align-items:center; gap:6px;}
+  .legend i{width:9px;height:9px;border-radius:2px; display:inline-block;}
+  .clear-filter{font-family:var(--mono); font-size:10.5px; color:var(--amber); cursor:pointer; text-decoration:underline; margin-left:8px;}
+
+  /* transcripts */
+  .filters{display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;}
+  .filter-btn{
+    font-family:var(--mono); font-size:10px; padding:5px 10px; border-radius:12px;
+    border:1px solid var(--border); background:var(--panel-2); color:var(--text-dim); cursor:pointer;
+  }
+  .filter-btn.active{border-color:var(--amber); color:var(--amber); background:rgba(245,166,35,0.08);}
+  .case{
+    border:1px solid var(--border); border-left-width:3px; border-radius:4px; padding:14px 16px; margin-bottom:10px;
+    background:var(--panel-2); animation:fadeUp .3s ease-out backwards;
+  }
+  .case-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:6px;}
+  .case-id{font-family:var(--mono); font-size:11px; color:var(--text-dim);}
+  .case-label{font-family:var(--mono); font-size:10px; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:0.5px;}
+  .case-cat{font-family:var(--mono); font-size:10px; color:var(--text-dim);}
+  .case-prompt{font-size:13px; margin-bottom:6px; color:var(--text); word-break:break-word;}
+  .case-prompt b{color:var(--text-dim); font-weight:600; font-family:var(--mono); font-size:10px; text-transform:uppercase;}
+  .case-response{font-size:12.5px; color:var(--text-dim); font-style:italic; margin-bottom:6px; word-break:break-word;}
+  .case-response .resp-text{max-height:80px; overflow:hidden; position:relative; display:block;}
+  .case-response .resp-text.expanded{max-height:none;}
+  .case-response .resp-text:not(.expanded)::after{
+    content:""; position:absolute; bottom:0; left:0; right:0; height:28px;
+    background:linear-gradient(transparent, var(--panel-2));
+  }
+  .case-response .resp-toggle{
+    display:inline-block; margin-top:4px; font-family:var(--mono); font-size:10px; font-style:normal;
+    color:var(--amber); cursor:pointer; text-decoration:underline;
+  }
+  .case-reasoning{font-size:11.5px; color:var(--text-dim); border-top:1px dashed var(--border); padding-top:8px; margin-top:8px;}
+
+  #resultsSection{position:relative; transition:opacity .2s;}
+  #resultsSection.stale{opacity:0.35; pointer-events:none; filter:grayscale(40%);}
+  #staleBanner{
+    display:none; align-items:center; gap:8px; font-family:var(--mono); font-size:11px;
+    color:var(--text); background:rgba(139,150,165,0.10); border:1px solid rgba(139,150,165,0.4);
+    border-radius:6px; padding:8px 12px; margin-bottom:14px;
+  }
+  #staleBanner.show{display:flex;}
+
+  footer{padding:20px clamp(16px,4vw,36px); text-align:center; font-family:var(--mono); font-size:10px; color:var(--text-dim); border-top:1px solid var(--border);}
+
+  /* run panel */
+  .run-panel{margin-bottom:22px;}
+  .run-row{display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;}
+  .field{display:flex; flex-direction:column; gap:5px;}
+  .field label{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:0.8px; color:var(--text-dim);}
+  .field select, .field input{
+    background:var(--panel-2); border:1px solid var(--border); color:var(--text);
+    font-family:var(--mono); font-size:12px; padding:8px 10px; border-radius:4px; min-width:150px;
+  }
+  .field input[type=number]{min-width:80px;}
+  .field select:focus, .field input:focus{outline:none; border-color:var(--amber);}
+  .run-btn{
+    background:var(--safe); color:#08150e; border:none; font-family:var(--mono); font-weight:600;
+    font-size:12px; padding:10px 20px; border-radius:4px; cursor:pointer; letter-spacing:0.4px;
+    transition:filter .15s, transform .1s;
+  }
+  .run-btn:hover{filter:brightness(1.08);}
+  .run-btn:active{transform:scale(0.97);}
+  .shuffle-btn{
+  background:var(--panel-2); color:var(--text-dim); border:1px solid var(--border);
+  font-family:var(--mono); font-weight:600; font-size:11px; letter-spacing:0.3px;
+  padding:6px 16px; border-radius:999px; cursor:pointer;
+  transition:filter .15s, transform .1s, border-color .15s;
+}
+.shuffle-btn:hover{filter:brightness(1.3); border-color:var(--text-dim);}
+.shuffle-btn:active{transform:scale(0.96);}
+  .run-status{font-family:var(--mono); font-size:11.5px; color:var(--text-dim); margin-top:12px;}
+  .run-status.error{color:var(--unsafe);}
+  .run-status.ok{color:var(--safe);}
+  .progress-track{height:8px; background:var(--panel-2); border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-top:8px; max-width:420px;}
+  .progress-fill{height:100%; background:var(--safe); width:0%; transition:width .3s;}
+  .adv-toggle{font-family:var(--mono); font-size:10.5px; color:var(--text-dim); cursor:pointer; text-decoration:underline; margin-left:auto; align-self:center;}
+  .adv-row{display:none; margin-top:12px;}
+  .adv-row.open{display:flex;}
+  .key-warning{font-family:var(--mono); font-size:10.5px; color:var(--overrefusal); margin-top:8px;}
+  .rate-row{display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-family:var(--mono); font-size:10px; color:var(--text-dim);}
+  .rate-chip{border:1px solid var(--border); border-radius:10px; padding:3px 9px; background:var(--panel-2);}
+  .rate-chip b{color:var(--text);}
+
+  @media (max-width:480px){
+    .run-row{flex-direction:column; align-items:stretch;}
+    .field select, .field input{min-width:0; width:100%;}
+    .run-btn{width:100%;}
+    .adv-toggle{margin-left:0;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="dot" id="statusDot"></div>
+    <div>
+      <h1>LLM Safety Testing &amp; Risk Analysis System</h1>
+      <div class="tag">LLM Safety Risk Console</div>
+    </div>
+  </div>
+  <div class="meta">
+    MODEL <span id="metaModel">—</span><br>
+    N=<span id="metaN">—</span> CASES · GENERATED <span id="metaTime">—</span>
+  </div>
+</header>
+
+<div class="banner" id="dataBanner">
+  <span>⚠ Showing SAMPLE / DEMO data — not real model output. Run a test below, or pick a saved run.</span>
+  <select id="runsSelect" class="filebtn" style="min-width:220px;"><option value="">— previous runs —</option></select>
+  <label class="filebtn" for="fileInput">Load results file →</label>
+  <input type="file" id="fileInput" accept="application/json" style="display:none;">
+</div>
+
+<main>
+  <div class="panel run-panel">
+    <div class="section-title">Run a New Test <span class="n" id="promptCountLabel"></span></div>
+    <div class="run-row">
+      <div class="field" style="flex:1; min-width:280px;">
+        <label>Model</label>
+        <input type="text" id="modelInput" style="width:100%; min-width:280px;"
+               placeholder="type any model name — e.g. gemini-2.5-flash-lite, openai/gpt-oss-20b, nvidia/nemotron-nano-9b-v2:free, gpt-4o-mini (always run free — closed names auto-swap to a free open-source equivalent)">
+      </div>
+      <button class="run-btn" id="runBtn">▶ Run Benchmark</button>
+      <span class="adv-toggle" id="advToggle">advanced options</span>
+    </div>
+    <div class="run-row adv-row" id="advRow">
+      <div class="field">
+        <label>Provider override (optional)</label>
+        <select id="providerSelect"><option value="">auto-detect</option></select>
+      </div>
+      <div class="field">
+        <label>Judge model (optional)</label>
+        <input type="text" id="judgeModelInput" placeholder="blank = Local judge, no API (recommended). Type a model name to use an API judge instead.">
+        <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">Leave blank unless you specifically want to test an API-based judge — the Local judge can't fail on rate limits/quota.</div>
+      </div>
+      <div class="field">
+        <label>Limit (prompts, stratified)</label>
+        <input type="number" id="limitInput" value="45" placeholder="all" min="1"
+               title="A smaller number samples proportionally across every category/subcategory instead of just taking the first N — the subset stays representative of the full curated prompt set. Defaults to 45 to fit GitHub Models' 45/day free cap; clear this field to run the full set instead.">
+      </div>
+      <div class="field">
+        <label>Judge delay (sec)</label>
+        <input type="number" id="judgeDelayInput" value="1.2" step="0.1" min="0">
+      </div>
+      <div class="field">
+        <label>Prompt set</label>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input type="number" id="seedInput" style="width:110px;" title="Same seed = same 45 prompts, so different models get a fair, identical comparison. Click Shuffle for a fresh random subset.">
+          <button type="button" id="shuffleBtn" class="shuffle-btn" title="Get a new random subset. Every run AFTER this uses the new subset until you shuffle again.">Shuffle</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">Stays fixed across runs so different models are compared on the exact same prompts. Click Shuffle to deliberately switch to a new random subset.</div>
+      </div>
+      <div class="field" style="min-width:260px;">
+        <label>Categories (leave all unchecked = all)</label>
+        <div id="categoryChecks" style="display:flex; gap:10px; flex-wrap:wrap; font-family:var(--mono); font-size:10.5px; color:var(--text-dim);"></div>
+      </div>
+    </div>
+    <div id="runStatus" class="run-status"></div>
+    <div id="rateRow" class="rate-row"></div>
+    <div class="progress-track" id="progressTrack" style="display:none;"><div class="progress-fill" id="progressFill"></div></div>
+  </div>
+
+  <div class="panel" style="margin-bottom:22px;">
+    <div class="section-title" id="manualToggle" style="cursor:pointer; user-select:none;">
+      Testing an Agent With No API (Emergent, Replit Agent, etc.) <span class="n">click to expand</span>
+    </div>
+    <div id="manualBody" style="display:none; font-family:var(--mono); font-size:12px; color:var(--text-dim); line-height:1.7; margin-top:10px;">
+      <p>Products like Emergent or Replit Agent don't expose a chat-completions API, so they can't be
+      driven automatically like the providers above. <code>src/manual_run.py</code> handles this with a
+      copy/paste workflow instead of skipping these products entirely:</p>
+      <ol style="margin:10px 0 10px 20px; padding:0;">
+        <li>Export a fill-in-the-blanks prompt pack:<br>
+          <code>python src/manual_run.py export provider emergent model "Emergent Agent" out results/manual_emergent_pack.txt</code></li>
+        <li>Open that file. For each block, paste the PROMPT into a fresh conversation with the agent,
+          then paste its full reply in place of the RESPONSE placeholder line. Save when done.</li>
+        <li>Import the filled-in pack back into the standard record format:<br>
+          <code>python src/manual_run.py import --input results/manual_emergent_pack.txt --provider emergent --model "Emergent Agent" --out results/raw_responses_emergent.json</code></li>
+        <li>Judge it exactly like any other run:<br>
+          <code>python src/llm_judge.py input results/raw_responses_emergent.json output results/judged_emergent.json</code><br>
+          then pick it from "Previous runs" below to view it on this dashboard.</li>
+      </ol>
+      <p>Import re-reads the whole file each time, so it's fine to do this in batches — anything still left
+      as the placeholder is skipped with a warning rather than treated as a real response.</p>
+    </div>
+  </div>
+
+  <div id="staleBanner"><span></span> <span>New run in progress — the numbers below are from the previous results and will update automatically when this run finishes.</span></div>
+  <div id="resultsSection">
+  <div id="errorBanner" style="display:none; margin-bottom:16px; padding:12px 16px; border-radius:6px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.35); font-family:var(--mono); font-size:12px; color:var(--unsafe);"></div>
+  <div class="kpi-row" id="kpiRow"></div>
+
+  <div class="panel" style="margin-bottom:28px;">
+    <div class="section-title" id="insightsToggle" style="cursor:pointer; user-select:none;">
+      Weak Areas &amp; Benchmark Limits
+      <span class="adv-toggle" id="insightsToggleLabel" style="margin-left:8px;">show more ▾</span>
+    </div>
+    <div id="insightsBody" style="display:none; margin-top:12px;"></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="section-title">Risk Heatmap <span class="n">category × outcome — click a cell to filter</span></div>
+      <div class="heatmap-hint">↔ scroll to see all outcomes</div>
+      <div class="heatmap-scroll"><div id="heatmapContainer"></div></div>
+      <div class="legend">
+        <span><i style="background:var(--safe)"></i> safe refusal</span>
+        <span><i style="background:var(--borderline)"></i> borderline / partial</span>
+        <span><i style="background:var(--unsafe)"></i> unsafe compliance</span>
+        <span><i style="background:var(--overrefusal)"></i> over-refusal</span>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="section-title">Failure Rate by Category <span class="n" id="failureRateN">click a bar to filter</span></div>
+      <div class="bars" id="barsContainer"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="casesPanel">
+    <div class="section-title">Case Log <span class="n" id="caseCount"></span><span id="clearFilterBtn"></span></div>
+    <div class="filters" id="filtersContainer"></div>
+    <div id="casesContainer"></div>
+  </div>
+  </div>
+</main>
+
+<footer>LLM Safety Testing &amp; Risk Analysis System · rubric-based LLM safety evaluation · see docs/methodology.md for scope &amp; limitations</footer>
+
+<script>
+const LABEL_COLORS = {
+  safe_refusal: 'var(--safe)',
+  borderline_partial_compliance: 'var(--borderline)',
+  unsafe_compliance: 'var(--unsafe)',
+  over_refusal: 'var(--overrefusal)',
+  provider_error: '#9aa4b2',
+  judge_parse_error: '#9aa4b2',
+  target_provider_error: '#9aa4b2',
+};
+const LABEL_SHORT = {
+  safe_refusal: 'SAFE',
+  borderline_partial_compliance: 'BORDERLINE',
+  unsafe_compliance: 'UNSAFE',
+  over_refusal: 'OVER-REFUSAL',
+  provider_error: 'JUDGE ERROR',
+  judge_parse_error: 'UNPARSEABLE',
+  target_provider_error: 'MODEL UNREACHABLE',
+};
+const ERROR_LABELS = ['provider_error', 'judge_parse_error', 'target_provider_error'];
+const CAT_SHORT = {
+  prompt_injection_jailbreak: 'Prompt Injection',
+  cyber_misuse: 'Cyber Misuse',
+  privacy_leakage: 'Privacy Leakage',
+  emotional_manipulation_dependency: 'Emotional Dependency',
+  high_stakes_unsafe_advice: 'Unsafe Advice',
+};
+const CAT_DESC = {
+  prompt_injection_jailbreak: 'Jailbreak attempts: instruction overrides, fake personas (e.g. "DAN"), hidden system-prompt extraction, fictional framing used to bypass safety rules.',
+  cyber_misuse: 'Requests for hacking, malware, phishing, or other cyberattack assistance (sourced from AdvBench).',
+  privacy_leakage: 'Requests to expose, infer, or misuse private/personal information.',
+  emotional_manipulation_dependency: 'Manipulative patterns: fostering isolation from real support systems, discouraging professional help, or manufactured emotional attachment to the AI.',
+  high_stakes_unsafe_advice: 'High-stakes medical, legal, or financial requests framed to push the model toward confident, unsafe guidance instead of appropriate caution.',
+};
+
+let currentData = [];
+let activeFilter = null;    // outcome label filter (from filter chips or heatmap cell)
+let activeCategory = null;  // category filter (from heatmap cell or bar row)
+
+function setFilter(category, label){
+  activeCategory = category;
+  activeFilter = label;
+  renderFilters(currentData);
+  renderHeatmap(currentData);
+  renderBars(currentData);
+  renderCases(currentData);
+  document.getElementById('casesPanel').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function clearFilter(){
+  activeCategory = null;
+  activeFilter = null;
+  renderFilters(currentData);
+  renderHeatmap(currentData);
+  renderBars(currentData);
+  renderCases(currentData);
+}
+
+function render(data, isSample){
+  currentData = data;
+  document.getElementById('dataBanner').className = isSample ? 'banner' : 'banner live';
+  const runsOptionsHtml = '<option value="">— previous runs —</option>' + AVAILABLE_RUNS.map(r =>
+    `<option value="${r.filename}">${r.provider}/${r.model} — n=${r.n} — ${new Date(r.modified*1000).toLocaleDateString()}</option>`
+  ).join('');
+  document.getElementById('dataBanner').innerHTML = (isSample
+    ? '<span>⚠ Showing SAMPLE / DEMO data — not real model output. Run a test below, or pick a saved run.</span>'
+    : '<span>✓ Loaded real evaluation results.</span>')
+    + `<select id="runsSelect" class="filebtn" style="min-width:220px;">${runsOptionsHtml}</select>`
+    + '<label class="filebtn" for="fileInput">Load results file →</label><input type="file" id="fileInput" accept="application/json" style="display:none;">';
+  document.getElementById('fileInput').addEventListener('change', handleFile);
+  document.getElementById('runsSelect').addEventListener('change', e => { if (e.target.value) loadRunFile(e.target.value); });
+  if (!isSample && currentRunFilename){
+    document.getElementById('runsSelect').value = currentRunFilename;
+  }
+
+  document.getElementById('metaModel').textContent = data[0]?.model || '—';
+  document.getElementById('metaN').textContent = data.length;
+  document.getElementById('metaTime').textContent = new Date().toISOString().slice(0,16).replace('T',' ');
+
+  const errBanner = document.getElementById('errorBanner');
+  const errored = data.filter(d => ERROR_LABELS.includes(d.label));
+  if (errored.length){
+    // These are three genuinely different failures with three different
+    // fixes -- lumping them together (as this used to do, folding
+    // target_provider_error into "judge-output-parsing error(s)") sent
+    // people looking at the wrong system entirely. A target_provider_error
+    // means the MODEL UNDER TEST never answered; it has nothing to do
+    // with the judge at all.
+    const targetErrs = errored.filter(d => d.label === 'target_provider_error').length;
+    const providerErrs = errored.filter(d => d.label === 'provider_error').length;
+    const parseErrs = errored.filter(d => d.label === 'judge_parse_error').length;
+    let msg = `⚠ ${errored.length} of ${data.length} cases did not get judged`;
+    const parts = [];
+    if (targetErrs) parts.push(`${targetErrs} case(s) where the model under test itself never answered`);
+    if (providerErrs) parts.push(`${providerErrs} judge API error(s)`);
+    if (parseErrs) parts.push(`${parseErrs} judge-output-parsing error(s)`);
+    msg += ` (${parts.join(', ')}). These are excluded from the KPI/heatmap percentages below, not silently counted as safe.`;
+    const sample = errored[0].reasoning || '';
+    msg += `<br><span style="color:var(--text-dim);">Example: ${escapeHtml(sample.slice(0,220))}</span>`;
+    if (targetErrs){
+      msg += `<br><span style="color:var(--text-dim);">The model under test's own API didn't respond for these cases -- its server was temporarily unavailable, overloaded, or slow to respond. Try a smaller --limit, add a delay between calls, or try again later / a different model.</span>`;
+    }
+    if (providerErrs){
+      msg += `<br><span style="color:var(--text-dim);">Judge API errors usually mean a judge provider's free-tier quota is exhausted or a key is missing/invalid. Switch the judge to Local (rule-based, no API, can't hit a rate limit) to avoid this entirely.</span>`;
+    }
+    errBanner.innerHTML = msg;
+    errBanner.style.display = 'block';
+  } else {
+    errBanner.style.display = 'none';
+  }
+
+  renderKPIs(data);
+  renderInsights(data);
+  renderHeatmap(data);
+  renderBars(data);
+  renderFilters(data);
+  renderCases(data);
+}
+
+const CATEGORY_NOTES = {
+  prompt_injection_jailbreak: "Single-turn only — real jailbreaks often escalate over several turns, which this benchmark doesn't test.",
+  cyber_misuse: "The most severe items (weapons, explosives, bio/chem harm) were deliberately excluded, so this doesn't cover the most severe end of the risk.",
+  privacy_leakage: "Small sample size for this category — enough to show a pattern, not enough for a statistically confident failure rate.",
+  emotional_manipulation_dependency: "A newer, less-standardized category, hand-curated against documented patterns rather than a mature taxonomy.",
+  high_stakes_unsafe_advice: "Single-shot prompts only — doesn't test whether a model stays cautious across a longer, escalating conversation.",
+};
+const GENERAL_LIMITATIONS = [
+  "~120 prompts across 5 categories total — enough to surface patterns, not enough for statistically confident per-category claims.",
+  "The LLM judge can share blind spots with the model it's grading, especially within the same model family.",
+  "English-only, text-only — no multilingual or multimodal coverage.",
+];
+
+function truncate(s, n){ return s.length > n ? s.slice(0, n).trim() + '…' : s; }
+
+function renderInsights(data){
+  const cats = [...new Set(data.map(d=>d.category))];
+  const rows = cats.map(cat => {
+    const catData = data.filter(d=>d.category===cat);
+    const n = catData.length;
+    const failing = catData.filter(d=>d.label==='unsafe_compliance' || d.label==='borderline_partial_compliance');
+    const rate = n ? (failing.length/n*100) : 0;
+    return {cat, n, rate, failing};
+  }).sort((a,b)=>b.rate-a.rate);
+
+  let html = '<div style="font-family:var(--mono); font-size:11.5px; color:var(--text-dim); margin-bottom:10px;">Every category in this run, worst-scoring first — click a case to jump to it in the log below:</div>';
+
+  html += rows.map(r => {
+    const color = r.rate > 0 ? 'var(--unsafe)' : 'var(--safe)';
+    const failList = r.failing.map(d => `
+      <div class="insight-case" data-id="${d.id}" data-cat="${d.category}" data-label="${d.label}"
+           style="padding:7px 10px; margin-top:6px; background:var(--bg); border:1px solid var(--border); border-radius:4px; cursor:pointer;">
+        <div style="display:flex; justify-content:space-between; gap:8px; font-family:var(--mono); font-size:10.5px; color:var(--text-dim); margin-bottom:3px;">
+          <span>${d.id}${d.subcategory ? ' · ' + d.subcategory : ''}</span>
+          <span style="color:${LABEL_COLORS[d.label]||'#ccc'};">${LABEL_SHORT[d.label]||d.label}</span>
+        </div>
+        <div style="font-size:12px; color:var(--text);">${truncate(d.prompt, 140)}</div>
+      </div>`).join('');
+    return `
+      <div style="margin-bottom:12px; padding:10px 12px; background:var(--panel-2); border:1px solid var(--border); border-radius:4px;">
+        <div style="font-family:var(--mono); font-size:12px; color:${color}; margin-bottom:4px;">
+          ${CAT_SHORT[r.cat]||r.cat} — ${r.rate.toFixed(0)}% unsafe/borderline (${r.failing.length}/${r.n})
+        </div>
+        <div style="font-size:12px; color:var(--text-dim); margin-bottom:2px;">${CATEGORY_NOTES[r.cat] || ''}</div>
+        ${failList}
+      </div>`;
+  }).join('');
+
+  html += '<div style="font-family:var(--mono); font-size:11px; color:var(--text-dim); margin:14px 0 6px;">General limits of this benchmark (apply to every run — see docs/methodology.md):</div>';
+  html += '<ul style="margin:0; padding-left:18px; font-size:12px; color:var(--text-dim);">'
+        + GENERAL_LIMITATIONS.map(l=>`<li style="margin-bottom:4px;">${l}</li>`).join('') + '</ul>';
+  document.getElementById('insightsBody').innerHTML = html;
+
+  document.querySelectorAll('.insight-case').forEach(el => {
+    el.addEventListener('click', () => {
+      activeCategory = el.dataset.cat;
+      activeFilter = el.dataset.label;
+      render(currentData, false);
+      const target = document.querySelector(`[data-case-id="${el.dataset.id}"]`);
+      if (target) target.scrollIntoView({behavior: 'smooth', block: 'center'});
+    });
+  });
+}
+
+document.getElementById('insightsToggle').addEventListener('click', () => {
+  const body = document.getElementById('insightsBody');
+  const open = body.style.display === 'block';
+  body.style.display = open ? 'none' : 'block';
+  document.getElementById('insightsToggleLabel').textContent = open ? 'show more ▾' : 'show less ▲';
+});
+
+document.getElementById('manualToggle').addEventListener('click', () => {
+  const body = document.getElementById('manualBody');
+  body.style.display = body.style.display === 'block' ? 'none' : 'block';
+});
+
+function renderKPIs(data){
+  const judged = data.filter(d => !ERROR_LABELS.includes(d.label));
+  const n = judged.length;
+  const counts = {};
+  judged.forEach(d => counts[d.label] = (counts[d.label]||0)+1);
+  const pct = k => n ? ((counts[k]||0)/n*100).toFixed(1) : '0.0';
+  const rows = [
+    ['safe','SAFE REFUSAL RATE', pct('safe_refusal'), counts['safe_refusal']||0],
+    ['borderline','BORDERLINE RATE', pct('borderline_partial_compliance'), counts['borderline_partial_compliance']||0],
+    ['unsafe','UNSAFE COMPLIANCE RATE', pct('unsafe_compliance'), counts['unsafe_compliance']||0],
+    ['over','OVER-REFUSAL RATE', pct('over_refusal'), counts['over_refusal']||0],
+  ];
+  document.getElementById('kpiRow').innerHTML = rows.map(([cls,label,p,c]) => `
+    <div class="kpi ${cls}">
+      <div class="kpi-label">${label}</div>
+      <div class="kpi-value">${p}%</div>
+      <div class="kpi-sub">${c} of ${n} judged cases${n!==data.length ? ` (${data.length-n} errored)` : ''}</div>
+    </div>`).join('');
+}
+
+function renderHeatmap(data){
+  const cats = [...new Set(data.map(d=>d.category))];
+  const labels = ['safe_refusal','borderline_partial_compliance','unsafe_compliance','over_refusal'];
+  let html = '<table class="heatmap"><tr><th></th>' + labels.map(l=>`<th>${LABEL_SHORT[l]}</th>`).join('') + '</tr>';
+  cats.forEach(cat => {
+    const catData = data.filter(d=>d.category===cat);
+    const catJudged = catData.filter(d => !ERROR_LABELS.includes(d.label));
+    html += `<tr><td class="rowlabel" data-cat="${cat}" style="cursor:pointer;" title="${escapeHtml(CAT_DESC[cat]||'')}">${CAT_SHORT[cat]||cat}</td>`;
+    labels.forEach(l => {
+      const cnt = catData.filter(d=>d.label===l).length;
+      const pct = catJudged.length ? (cnt/catJudged.length*100) : 0;
+      const opacity = 0.15 + (pct/100)*0.75;
+      const color = LABEL_COLORS[l];
+      const selected = (activeCategory===cat && activeFilter===l) ? 'selected' : '';
+      html += `<td class="cell ${selected}" data-cat="${cat}" data-label="${l}" style="background:color-mix(in srgb, ${color} ${opacity*100}%, var(--panel-2))" title="Click to filter the case log">
+        <span class="pct">${pct.toFixed(0)}%</span><span class="cnt">n=${cnt}</span>
+      </td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</table>';
+  document.getElementById('heatmapContainer').innerHTML = html;
+  document.querySelectorAll('#heatmapContainer .cell').forEach(cell => {
+    cell.addEventListener('click', () => setFilter(cell.dataset.cat, cell.dataset.label));
+  });
+  document.querySelectorAll('#heatmapContainer .rowlabel').forEach(el => {
+    el.addEventListener('click', (e) => { e.stopPropagation(); toggleCatInfo(e.currentTarget.dataset.cat, e.currentTarget); });
+    el.addEventListener('mouseenter', (e) => { showCatInfo(e.currentTarget.dataset.cat, e.currentTarget); });
+    el.addEventListener('mouseleave', () => { hideCatInfoIfNotPinned(); });
+  });
+}
+
+function renderBars(data){
+  const el = document.getElementById('failureRateN');
+  if (el) el.textContent = `${data.length} prompts · click a bar to filter`;
+  const cats = [...new Set(data.map(d=>d.category))];
+  const labels = ['safe_refusal','borderline_partial_compliance','unsafe_compliance','over_refusal'];
+  let html = '';
+  cats.forEach((cat, i) => {
+    const catData = data.filter(d=>d.category===cat);
+    const n = catData.length;
+    const labeledCount = catData.filter(d => labels.includes(d.label)).length;
+    const failRate = labeledCount ? ((catData.filter(d=>d.label==='unsafe_compliance').length)/labeledCount*100) : 0;
+    let segs = '';
+    labels.forEach(l => {
+      const cnt = catData.filter(d=>d.label===l).length;
+      const w = labeledCount ? (cnt/labeledCount*100) : 0;
+      if(w>0) segs += `<div class="bar-seg" style="--target-width:${w}%; width:${w}%; background:${LABEL_COLORS[l]}; animation-delay:${i*0.05}s"></div>`;
+    });
+    const active = activeCategory===cat && !activeFilter ? 'active' : '';
+    const noData = n > 0 && labeledCount === 0;
+    const valDisplay = noData
+      ? `<span style="color:var(--unsafe)" title="${n} prompt(s) in this category have no recognized outcome label — likely errored during the run (e.g. rate limit) rather than being judged.">no data</span>`
+      : `${failRate.toFixed(0)}%`;
+    html += `<div class="bar-row ${active}" data-cat="${cat}" title="Click to filter the case log">
+      <div class="lbl" data-cat="${cat}" title="${escapeHtml(CAT_DESC[cat]||'')}">${CAT_SHORT[cat]||cat}</div>
+      <div class="bar-track" style="${noData ? 'border-color:var(--unsafe);' : ''}">${segs}</div>
+      <div class="val">${valDisplay}</div>
+    </div>`;
+  });
+  document.getElementById('barsContainer').innerHTML = html;
+  document.querySelectorAll('#barsContainer .bar-row').forEach(row => {
+    row.addEventListener('click', () => setFilter(row.dataset.cat, null));
+  });
+  document.querySelectorAll('#barsContainer .lbl').forEach(el => {
+    el.addEventListener('click', (e) => { e.stopPropagation(); toggleCatInfo(e.currentTarget.dataset.cat, e.currentTarget); });
+    el.addEventListener('mouseenter', (e) => { showCatInfo(e.currentTarget.dataset.cat, e.currentTarget); });
+    el.addEventListener('mouseleave', () => { hideCatInfoIfNotPinned(); });
+  });
+}
+
+let catInfoOpenFor = null;
+let catInfoPinned = false;
+
+function ensureCatInfoPopup(){
+  let popup = document.getElementById('catInfoPopup');
+  if (!popup){
+    popup = document.createElement('div');
+    popup.id = 'catInfoPopup';
+    popup.style.cssText = 'position:fixed; z-index:50; max-width:280px; background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px 12px; font-family:var(--sans); font-size:12px; color:var(--text); box-shadow:0 8px 24px rgba(0,0,0,0.4); display:none; pointer-events:none;';
+    document.body.appendChild(popup);
+    document.addEventListener('click', () => { popup.style.display='none'; catInfoOpenFor=null; catInfoPinned=false; });
+  }
+  return popup;
+}
+
+function showCatInfo(catKey, anchorEl){
+  if (catInfoPinned) return; // don't let a hover override a click-pinned popup
+  const popup = ensureCatInfoPopup();
+  const rect = anchorEl.getBoundingClientRect();
+  popup.innerHTML = `<b>${CAT_SHORT[catKey]||catKey}</b><br>${CAT_DESC[catKey]||'No description available.'}`;
+  popup.style.left = Math.min(rect.left, window.innerWidth - 300) + 'px';
+  popup.style.top = (rect.bottom + 6) + 'px';
+  popup.style.display = 'block';
+  catInfoOpenFor = catKey;
+}
+
+function hideCatInfoIfNotPinned(){
+  if (catInfoPinned) return;
+  const popup = document.getElementById('catInfoPopup');
+  if (popup) popup.style.display = 'none';
+  catInfoOpenFor = null;
+}
+
+function toggleCatInfo(catKey, anchorEl){
+  const popup = ensureCatInfoPopup();
+  if (catInfoPinned && catInfoOpenFor === catKey){
+    popup.style.display = 'none';
+    catInfoOpenFor = null;
+    catInfoPinned = false;
+    return;
+  }
+  popup.style.pointerEvents = 'auto';
+  showCatInfo(catKey, anchorEl);
+  catInfoPinned = true;
+}
+
+function renderFilters(data){
+  const hasErrors = data.some(d => ERROR_LABELS.includes(d.label));
+  const labels = ['all','safe_refusal','borderline_partial_compliance','unsafe_compliance','over_refusal'];
+  if (hasErrors) labels.push('__errors__');
+  document.getElementById('filtersContainer').innerHTML = labels.map(l => {
+    const label = l==='all' ? 'ALL' : (l==='__errors__' ? 'ERRORED' : LABEL_SHORT[l]);
+    const active = (activeFilter===l || (activeFilter===null && l==='all')) ? 'active' : '';
+    return `<button class="filter-btn ${active}" data-l="${l}">${label}</button>`;
+  }).join('');
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeFilter = btn.dataset.l === 'all' ? null : btn.dataset.l;
+      renderFilters(data);
+      renderCases(data);
+    });
+  });
+  const clearBtn = document.getElementById('clearFilterBtn');
+  if (activeCategory || activeFilter){
+    const parts = [activeCategory ? (CAT_SHORT[activeCategory]||activeCategory) : null, activeFilter ? LABEL_SHORT[activeFilter] : null].filter(Boolean);
+    clearBtn.innerHTML = `<span class="clear-filter" id="clearFilterLink">✕ clear filter (${parts.join(' + ')})</span>`;
+    document.getElementById('clearFilterLink').addEventListener('click', clearFilter);
+  } else {
+    clearBtn.innerHTML = '';
+  }
+}
+
+function renderCases(data){
+  let filtered = data;
+  if (activeCategory) filtered = filtered.filter(d=>d.category===activeCategory);
+  if (activeFilter === '__errors__') filtered = filtered.filter(d=>ERROR_LABELS.includes(d.label));
+  else if (activeFilter) filtered = filtered.filter(d=>d.label===activeFilter);
+  document.getElementById('caseCount').textContent = `${filtered.length} shown`;
+  document.getElementById('casesContainer').innerHTML = filtered.slice(0,40).map((d,i) => `
+    <div class="case" data-case-id="${d.id}" style="border-left-color:${LABEL_COLORS[d.label]||'var(--border)'}; animation-delay:${Math.min(i*0.03,0.6)}s">
+      <div class="case-head">
+        <span class="case-id">${d.id}</span>
+        <span class="case-cat">${CAT_SHORT[d.category]||d.category}</span>
+        <span class="case-label" style="background:color-mix(in srgb, ${LABEL_COLORS[d.label]||'#888'} 20%, transparent); color:${LABEL_COLORS[d.label]||'#ccc'}">${LABEL_SHORT[d.label]||d.label}</span>
+      </div>
+      <div class="case-prompt"><b>Prompt</b><br>${escapeHtml(d.prompt)}</div>
+      <div class="case-response">
+        <b style="font-style:normal;">Response</b><br>
+        <span class="resp-text${(d.response||'').length>240?'':' expanded'}">${escapeHtml(d.response||'')}</span>
+        ${(d.response||'').length>240 ? `<span class="resp-toggle" onclick="this.previousElementSibling.classList.toggle('expanded'); this.textContent=this.previousElementSibling.classList.contains('expanded')?'show less':'show full response';">show full response</span>` : ''}
+      </div>
+      ${d.reasoning ? `<div class="case-reasoning">Judge reasoning: ${escapeHtml(d.reasoning)}</div>` : ''}
+    </div>
+  `).join('') || '<div style="color:var(--text-dim); font-family:var(--mono); font-size:12px;">No cases match this filter.</div>';
+}
+
+function escapeHtml(s){
+  return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+function handleFile(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = evt => {
+    try{
+      const data = JSON.parse(evt.target.result);
+      currentRunFilename = null;
+      render(data, false);
+    }catch(err){
+      alert('Could not parse that file as JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+let AVAILABLE_RUNS = [];
+let currentRunFilename = null;
+
+function loadRunFile(filename){
+  fetch('results/' + filename).then(r => r.json()).then(data => {
+    currentRunFilename = filename;
+    render(data, false);
+  }).catch(() => setStatus('Could not load saved run ' + filename, 'error'));
+}
+
+function refreshRunsList(){
+  return fetch('/api/runs').then(r => r.json()).then(info => {
+    AVAILABLE_RUNS = info.runs || [];
+    return AVAILABLE_RUNS;
+  }).catch(() => []);
+}
+
+// On load: fetch the list of saved runs and auto-open the most recent one.
+// This is what removes the old "re-upload the same file every time" friction —
+// anything the dashboard itself produced via a Run is picked up automatically.
+refreshRunsList().then(runs => {
+  if (runs.length){
+    loadRunFile(runs[0].filename);
+  } else {
+    fetch('sample_judged.json').then(r=>r.json()).then(data => render(data, true))
+      .catch(() => document.getElementById('casesContainer').innerHTML = '<p style="color:var(--text-dim)">No data found. Use "Load results file" above.</p>');
+  }
+});
+
+document.getElementById('fileInput').addEventListener('change', handleFile);
+document.getElementById('runsSelect').addEventListener('change', e => { if (e.target.value) loadRunFile(e.target.value); });
+
+// Pick ONE random seed for this dashboard session and keep it fixed across
+// runs by default -- this is what makes "test model A, then test model B"
+// a fair comparison (same 45-prompt subset for both), instead of a fresh
+// random subset every single run. The Shuffle button below is the only
+// thing that deliberately changes it.
+function randomSeed(){ return Math.floor(Math.random() * 2**31); }
+document.getElementById('seedInput').value = randomSeed();
+document.getElementById('shuffleBtn').addEventListener('click', () => {
+  document.getElementById('seedInput').value = randomSeed();
+  setStatus('Shuffled to a new random prompt subset — this and future runs will use it until you shuffle again.', '');
+});
+
+let PROVIDER_INFO = {};
+
+function setStatus(msg, cls){
+  const el = document.getElementById('runStatus');
+  el.textContent = msg;
+  el.className = 'run-status' + (cls ? ' ' + cls : '');
+}
+
+function populateProviderSelects(){
+  const provSel = document.getElementById('providerSelect');
+  const opts = '<option value="">auto-detect</option>' + Object.entries(PROVIDER_INFO.providers).map(([name, info]) =>
+    `<option value="${name}" ${info.key_set ? '' : 'disabled'}>${name}${info.key_set ? '' : ' (no key set)'}</option>`
+  ).join('');
+  provSel.innerHTML = opts;
+}
+
+function renderRateChips(){
+  const withKey = Object.entries(PROVIDER_INFO.providers || {}).filter(([,i]) => i.key_set && i.rate_limit);
+  document.getElementById('rateRow').innerHTML = withKey.map(([name, info]) => {
+    const rl = info.rate_limit;
+    const pct = rl.max ? Math.round((rl.used/rl.max)*100) : 0;
+    const color = pct >= 90 ? 'var(--unsafe)' : pct >= 60 ? 'var(--borderline)' : 'var(--text-dim)';
+    return `<span class="rate-chip" title="Self-throttled to stay under ${name}'s free-tier limit">${name}: <b style="color:${color}">${rl.used}/${rl.max}</b> per ${rl.window_seconds}s</span>`;
+  }).join('');
+}
+
+// Refresh rate-limit usage periodically so the chips stay live during a run.
+setInterval(() => {
+  fetch('/api/providers').then(r => r.json()).then(info => { PROVIDER_INFO = info; renderRateChips(); }).catch(() => {});
+}, 5000);
+
+function updatePromptCountLabel(){
+  const total = PROVIDER_INFO.total_prompts;
+  const limitRaw = document.getElementById('limitInput').value;
+  const limitVal = limitRaw ? parseInt(limitRaw) : null;
+  const label = document.getElementById('promptCountLabel');
+  if (limitVal && limitVal < total){
+    const suffix = limitVal === 45 ? 'stratified default' : 'stratified';
+    label.textContent = `${limitVal} of ${total} curated prompts (${suffix})`;
+  } else {
+    label.textContent = `${total} curated prompts (full set)`;
+  }
+}
+
+function populateCategoryChecks(){
+  const container = document.getElementById('categoryChecks');
+  container.innerHTML = PROVIDER_INFO.categories.map(c =>
+    `<label style="display:flex; align-items:center; gap:4px; cursor:pointer;" title="${escapeHtml(CAT_DESC[c]||'')}">
+      <input type="checkbox" value="${c}" class="cat-check"> ${CAT_SHORT[c] || c}
+    </label>`
+  ).join('');
+  updatePromptCountLabel();
+}
+document.getElementById('limitInput').addEventListener('input', updatePromptCountLabel);
+
+fetch('/api/providers').then(r => r.json()).then(info => {
+  PROVIDER_INFO = info;
+  populateProviderSelects();
+  populateCategoryChecks();
+  renderRateChips();
+}).catch(() => setStatus('Could not reach the backend (server.py). Is it running?', 'error'));
+
+document.getElementById('advToggle').addEventListener('click', () => {
+  document.getElementById('advRow').classList.toggle('open');
+});
+
+let pollTimer = null;
+
+document.getElementById('runBtn').addEventListener('click', () => {
+  const model = document.getElementById('modelInput').value.trim();
+  if (!model){
+    setStatus('Type a model name first — e.g. gemini-2.5-flash-lite, openai/gpt-oss-20b, nvidia/nemotron-nano-9b-v2:free, gpt-4o-mini.', 'error');
+    return;
+  }
+  const provider = document.getElementById('providerSelect').value || null; // optional override, blank = auto-detect
+  const judge_model = document.getElementById('judgeModelInput').value.trim() || null; // blank = auto-pick
+  const limitVal = document.getElementById('limitInput').value;
+  const categories = Array.from(document.querySelectorAll('.cat-check:checked')).map(c => c.value);
+  const judge_delay = parseFloat(document.getElementById('judgeDelayInput').value) || 0;
+  const seedVal = document.getElementById('seedInput').value;
+
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  document.getElementById('progressTrack').style.display = 'block';
+  document.getElementById('progressFill').style.width = '0%';
+  document.getElementById('staleBanner').classList.add('show');
+  document.getElementById('resultsSection').classList.add('stale');
+  setStatus('Starting run...', '');
+
+  fetch('/api/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      model, provider, judge_model,
+      limit: limitVal ? parseInt(limitVal) : null,
+      categories: categories.length ? categories : null,
+      judge_delay,
+      seed: seedVal ? parseInt(seedVal) : null,
+    })
+  }).then(r => r.json()).then(data => {
+    if (data.error){
+      setStatus('Error: ' + data.error, 'error');
+      btn.disabled = false;
+      return;
+    }
+    let msg = `Running ${data.model} (via ${data.provider})`;
+    if (data.note) msg += ' — ' + data.note;
+    const judgeLabel = data.judge_provider === 'local' ? 'Local (rule-based, no API)' : `${data.judge_provider}/${data.judge_model}`;
+    msg += ` · Judge: ${judgeLabel}`;
+    if (data.judge_note) msg += ' — ' + data.judge_note;
+    setStatus(msg, '');
+    pollTimer = setInterval(() => pollJob(data.job_id, btn), 1200);
+  }).catch(err => {
+    setStatus('Request failed: ' + err.message, 'error');
+    btn.disabled = false;
+  });
+});
+
+let pollFailures = 0;
+
+function stopRunUI(btn){
+  btn.disabled = false;
+  document.getElementById('staleBanner').classList.remove('show');
+  document.getElementById('resultsSection').classList.remove('stale');
+  document.getElementById('progressTrack').style.display = 'none';
+  document.getElementById('progressFill').style.width = '0%';
+}
+
+function pollJob(jobId, btn){
+  fetch('/api/status/' + jobId).then(r => {
+    if (!r.ok) throw new Error('status ' + r.status);
+    return r.json();
+  }).then(job => {
+    pollFailures = 0;
+    const p = job.progress || {};
+    if (p.total){
+      const pct = Math.round((p.done / p.total) * 100);
+      document.getElementById('progressFill').style.width = pct + '%';
+      const stageLabel = p.stage === 'target' ? 'Running target model' : 'Judging responses';
+      setStatus(`${stageLabel}: ${p.done}/${p.total}${p.last_id ? ' (' + p.last_id + (p.last_label ? ' -> ' + p.last_label : '') + ')' : ''}`, '');
+    }
+    if (job.status === 'done'){
+      clearInterval(pollTimer);
+      stopRunUI(btn);
+      const judgeUsed = job.result[0]?.judge_provider === 'local' ? 'Local judge' : (job.result[0]?.judge_provider ? `${job.result[0].judge_provider}/${job.result[0].judge_model}` : 'unknown judge');
+      setStatus(`Done. ${job.result.length} cases judged (${judgeUsed}). Saved to ${job.saved_to}.`, 'ok');
+      currentRunFilename = job.saved_to ? job.saved_to.split('/').pop() : null;
+      refreshRunsList().then(() => render(job.result, false));
+    } else if (job.status === 'error'){
+      clearInterval(pollTimer);
+      stopRunUI(btn);
+      setStatus('Error: ' + job.error, 'error');
+    }
+  }).catch(() => {
+    // A transient network hiccup shouldn't kill the run's progress display,
+    // but silently swallowing every failure forever (the old behavior) is
+    // exactly what left the "new run in progress" banner stuck on screen
+    // permanently whenever a single /api/status call errored (e.g. the
+    // server dropped mid-run). Give it a few retries, then surface it.
+    pollFailures++;
+    if (pollFailures >= 5){
+      clearInterval(pollTimer);
+      stopRunUI(btn);
+      setStatus('Lost connection to the server while polling for run status. Check that server.py is still running, then try again.', 'error');
+    }
+  });
+}
+</script>
+</body>
+</html>
