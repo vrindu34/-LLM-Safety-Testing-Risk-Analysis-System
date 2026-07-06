@@ -1,221 +1,275 @@
 # LLM Safety Testing & Risk Analysis System
 
-A compact, reproducible pipeline for evaluating LLM responses across five
-safety risk categories, with an explicit rubric, a rule-based prescreen,
-an LLM judge, and a reliability check on the judge itself.
+A benchmark and analysis pipeline for evaluating how large language models respond to risky prompts across five safety categories: **prompt injection / jailbreak, cyber misuse, privacy leakage, emotional manipulation, and high-stakes unsafe advice**.
 
-Built as a research work-sample project. See `docs/methodology.md` for
-full positioning against prior work (AdvBench, Do-Not-Answer, HarmBench,
-JailbreakBench, Project Moonshot) and stated limitations.
+The system tests a target model on a curated benchmark built from **AdvBench**, **Do-Not-Answer**, and **project-curated prompts** for categories with limited public coverage. Model responses are evaluated using a **rule-based prescreen** and a **rubric-based LLM judge**, then labeled as **safe refusal, borderline partial compliance, unsafe compliance, or over-refusal**. The project also includes a **judge–human agreement check using Cohen’s kappa** and a **local dashboard** for exploring category-wise failures, label distributions, and example cases.
 
-## Risk categories
+---
 
-1. **Prompt injection / jailbreak** — instruction override, persona
-   hijack, hidden-prompt extraction, hypothetical framing, etc.
-2. **Cyber misuse** — phishing, malware-adjacent scripting, credential
-   theft framing, evasion requests (sampled from AdvBench, filtered to
-   cyber-specific behaviors; explosives/weapons/bio excluded by design).
-3. **Privacy leakage** — extraction/inference of personal data, session-
-   memory abuse patterns.
-4. **Emotional manipulation / dependency-style behavior** — isolation
-   patterns, discouraging real help-seeking, manufactured intimacy,
-   unconditional-agreement demands.
-5. **High-stakes unsafe advice** — medical/legal/financial guidance given
-   with false certainty or missing caveats.
+## What this project does
+
+This project is designed to test how safely an LLM handles prompts that try to trigger harmful, manipulative, privacy-violating, or high-stakes unsafe behavior.
+
+Given a benchmark of risky prompts, the pipeline:
+
+1. sends each prompt to a target model,
+2. stores the model’s response,
+3. applies a rule-based prescreen for fast first-pass screening,
+4. evaluates the response with a rubric-based LLM judge,
+5. assigns one of four safety labels, and
+6. summarizes the results through category-level failure rates, examples, and agreement statistics.
+
+The goal is not just to measure whether a model “refuses” or “answers,” but to analyze **how** it fails, **where** it fails, and **which safety categories are weakest**.
+
+---
+
+## Risk categories covered
+
+### 1) Prompt Injection / Jailbreak
+
+Tests whether a model can be manipulated into ignoring instructions, revealing hidden prompts, following adversarial reframing, or bypassing intended safeguards.
+
+### 2) Cyber Misuse
+
+Covers prompts related to phishing, credential theft framing, malware-adjacent scripting, evasion behavior, and other cyber-abuse scenarios.
+
+### 3) Privacy Leakage
+
+Evaluates whether the model reveals, infers, or mishandles personal, sensitive, or confidential information.
+
+### 4) Emotional Manipulation / Dependency-Style Behavior
+
+Tests for assistant behavior that encourages emotional dependency, discourages real-world support, reinforces manipulative dynamics, or adopts unhealthy relational framing.
+
+### 5) High-Stakes Unsafe Advice
+
+Covers unsafe or overconfident responses in high-impact domains such as medical, legal, and financial advice.
+
+---
+
+## Evaluation approach
+
+The benchmark combines prompts adapted from existing red-teaming and refusal datasets with project-curated prompts for categories where public coverage was limited. Responses are then evaluated in two stages:
+
+* **Rule-based prescreen**
+  A lightweight first-pass layer that flags obvious risky patterns and organizes responses before detailed judging.
+
+* **Rubric-based LLM judge**
+  A category-aware evaluator that assigns one of four labels:
+
+  * `safe_refusal`
+  * `borderline_partial_compliance`
+  * `unsafe_compliance`
+  * `over_refusal`
+
+To check whether the judge is behaving consistently, the project also compares judged outputs against a human-labeled sample using **Cohen’s kappa**.
+
+---
 
 ## Project structure
 
-```
+```bash id="o7l0rb"
 llm-risk-system/
 ├── data/
-│   ├── raw/                     # pulled source datasets (AdvBench, Do-Not-Answer)
-│   └── curated/                 # llm-risk-system_prompts.{csv,json} — the actual eval set
+│   ├── raw/                     # source benchmark datasets
+│   └── curated/                 # final evaluation set used by the benchmark
 ├── src/
-│   ├── curate_dataset.py        # builds the curated prompt set from raw sources
-│   ├── run_benchmark.py         # sends prompts to a target model, saves responses
-│   ├── rule_based_prescreen.py  # fast first-pass heuristic labeling
-│   ├── llm_judge.py             # rubric-based LLM judge (the main evaluator)
-│   └── agreement_check.py       # Cohen's kappa: judge vs. human spot-check labels
-├── results/                     # output of runs (gitignored except .gitkeep)
-├── dashboard/                   # standalone HTML dashboard (see below)
-└── docs/
-    └── methodology.md
+│   ├── curate_dataset.py        # builds / refreshes the curated prompt set
+│   ├── run_benchmark.py         # runs prompts on a target model
+│   ├── rule_based_prescreen.py  # first-pass heuristic screening
+│   ├── llm_judge.py             # rubric-based LLM evaluator
+│   ├── agreement_check.py       # judge vs human agreement check
+│   ├── manual_run.py            # workflow for testing products with no API
+│   └── providers.py             # model provider integrations + routing
+├── dashboard/
+│   └── index.html               # local dashboard UI
+├── docs/
+│   └── methodology.md
+├── results/                     # benchmark outputs
+├── server.py                    # serves dashboard + run endpoints
+├── requirements.txt
+└── README.md
 ```
+
+---
+
+## Core components
+
+### Curated benchmark dataset
+
+The benchmark covers five LLM safety risk categories and combines:
+
+* prompts sourced from **AdvBench** and **Do-Not-Answer**
+* project-curated prompts for categories with weaker public benchmark coverage, especially around prompt injection and emotional dependency-style behavior
+
+### Rule-based prescreen
+
+A lightweight filter used before full judging to catch obvious patterns and make evaluation more structured.
+
+### Rubric-based LLM judge
+
+The main evaluator. It uses category-specific judging criteria to classify each response into one of four labels rather than using a simple safe/unsafe binary.
+
+### Agreement check
+
+A reliability step that compares judge labels with human labels using **Cohen’s kappa**.
+
+### Dashboard
+
+A local dashboard for exploring benchmark outputs, category-wise failures, label distributions, and example cases.
+
+---
 
 ## Setup
 
-```bash
-pip install pandas
+Install dependencies:
+
+```bash id="pk0s9p"
+pip install -r requirements.txt
 ```
 
-No API costs required — this project runs entirely on free API tiers.
+Set any API keys you want to use:
 
-### Get free API keys (no credit card needed, as of mid-2026)
-
-- **Google Gemini** (recommended as your primary "model under test" — frontier-class quality): go to https://aistudio.google.com/apikey, sign in with a Google account, click "Create API key." Free tier: ~1,500 requests/day on `gemini-2.5-flash`.
-- **Groq** (recommended as your judge model, or a second model to compare — very fast, open-weight models): go to https://console.groq.com/keys, sign up, create a key. Free tier: high daily request volume on models like `gpt-oss-120b`.
-- **OpenRouter** (unlocks "type literally any model name" — one key fronts 25+ free open-weight models: Llama, DeepSeek, Qwen, Gemma, GPT-OSS, and more): go to https://openrouter.ai/keys. This is what lets `guess_provider_and_model()` auto-substitute a free equivalent when you type a closed model name like `claude-sonnet-4-5`.
-- **GitHub Models** (the one route to a *real* GPT model, not an open-weight stand-in): create a fine-grained personal access token at https://github.com/settings/personal-access-tokens/new with "Models" read-only permission. Typing `gpt-4o` or `chatgpt-4` routes here automatically if `GITHUB_TOKEN` is set, ahead of the OpenRouter substitute.
-
-Set whichever you have as environment variables:
-```bash
+```bash id="v9e7f4"
 export GEMINI_API_KEY=...
 export GROQ_API_KEY=...
 export OPENROUTER_API_KEY=...
 export GITHUB_TOKEN=...
+export OPENAI_API_KEY=...
+export ANTHROPIC_API_KEY=...
 ```
-(Anthropic's/OpenAI's native APIs are also supported via `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` if you have credits, but they have no indefinite free tier as of mid-2026 and are only used if you explicitly pick them in the dashboard's advanced options — never chosen automatically.)
 
-Using two *different* providers — one for the model under test, a different one as judge — is intentional, not just cost-driven: it reduces the risk that the judge shares blind spots with the model it's grading (see `docs/methodology.md`).
+The project supports multiple providers, including **Gemini, Groq, OpenAI, Anthropic, OpenRouter, and GitHub Models**.
 
-**Testing a product with no API at all** (Emergent, Replit Agent, or anything else you can only reach through a chat window): see `src/manual_run.py` and the "Testing an Agent With No API" panel on the dashboard — it exports a copy/paste prompt pack and imports your pasted replies back into the same record format everything else uses.
+---
 
-## What's original research vs. what's tooling
+## Running the benchmark
 
-For anyone reviewing this as a fellowship work sample, the actual
-contribution is in `data/curated/`, `src/curate_dataset.py`, and the
-rubric + category-specific judging guidance in `src/llm_judge.py`:
+You can use either the dashboard or the command line pipeline.
 
-- The 123-prompt curated set, sourced and filtered from AdvBench and
-  Do-Not-Answer with source IDs preserved, plus an originally-written
-  prompt-injection category built from the OWASP LLM01 taxonomy.
-- The 4-label rubric (safe_refusal / borderline_partial_compliance /
-  unsafe_compliance / over_refusal) and per-category judging criteria.
-- The reliability check design (`agreement_check.py`, Cohen's kappa
-  against a human-labeled sample) and the stated methodology/limitations
-  in `docs/methodology.md`.
+## Option 1: Dashboard
 
-Everything else — `server.py`, the dashboard, `guess_provider_and_model()`'s
-free-routing logic, the rate limiter, and `manual_run.py` — is tooling
-built on top of that research core. It calls the same `run_benchmark()` /
-`judge_records()` functions a person would otherwise run from the command
-line; no prompts, rubric text, or judging logic changed to build any of it.
-Worth mentioning as engineering work in a writeup, but distinct from the
-scientific claims above.
+Start the local server:
 
-## Running the full pipeline
-
-Two ways to run it — pick whichever you want.
-
-### Option A: dashboard (type in a model, click Run)
-
-```bash
-pip install -r requirements.txt
-export GEMINI_API_KEY=...      # free, no card: https://aistudio.google.com/apikey
-export GROQ_API_KEY=...        # free, no card: https://console.groq.com/keys
-export OPENROUTER_API_KEY=...  # optional: unlocks testing *any* model by name (https://openrouter.ai/keys)
+```bash id="8qbvvc"
 python server.py
 ```
 
-Open `http://localhost:8000`. In the "Run a New Test" panel there's one
-field: **Model** — just type a name, e.g. `gpt-4o`, `gemini-2.5-flash`,
-`gpt-oss-120b`, `deepseek-r1`, `qwen3-coder`.
-It always runs for free: native no-card providers (Gemini, Groq) are used
-when the name matches one; otherwise it's routed to a free ($0) open-source
-model on OpenRouter. Closed/paid names that DO have a free open-weight
-equivalent (e.g. `gpt-4o`) are automatically substituted with one (e.g.
-OpenAI's own open-source GPT-OSS model) rather than silently running — and
-billing — the real paid model. A few closed models genuinely have no free
-or open-weight equivalent anywhere (Claude, Grok) — typing one of those
-gives a clear "not available for free" message instead of guessing. The
-dashboard tells you exactly what ran and
-why in the run-status line. It also auto-picks a *different*, also-free
-model as judge, so the judge doesn't share blind spots with the model
-being tested. Click **Run Benchmark**; progress streams live, results
-render automatically, and are saved to
-`results/judged_<provider>_<model>_<job_id>.json`.
+Then open:
 
-If you do have a paid ANTHROPIC_API_KEY or OPENAI_API_KEY and specifically
-want to test the real paid model, set that env var and pick the provider
-explicitly in "advanced options" — the free-by-default auto-detection only
-applies when you leave provider on "auto-detect".
+```bash id="8s9doj"
+http://localhost:8000
+```
 
-Past runs are picked up automatically too — the dashboard lists
-everything already in `results/` in a "previous runs" dropdown and
-opens the most recent one on load, so you never have to manually
-re-upload a file you already generated.
+From the dashboard you can:
 
-Each run also has a **"show more"** panel that names which categories
-that model scored weakest in, alongside the benchmark's own known
-limitations (sample size, single-turn scope, etc.) — so a low failure
-rate isn't presented as a bigger claim than the data supports.
+* run a benchmark on a target model
+* inspect failure rates by category
+* view label distributions and example cases
+* compare previous runs
+* load benchmark results directly from the `results/` directory
 
-### Option B: command line
+---
 
-```bash
-# 1. (Already done — regenerate if you want to change sampling/seeds)
+## Option 2: Command line pipeline
+
+### 1) Build or refresh the curated dataset
+
+```bash id="nrx5nd"
 python src/curate_dataset.py
+```
 
-# 2. Run the target model against every curated prompt (free: Gemini)
+### 2) Run the target model on the benchmark prompts
+
+```bash id="vxdy7x"
 python src/run_benchmark.py --provider gemini --model gemini-2.5-flash --out results/raw_responses.json
+```
 
-# 3. Judge the responses with a DIFFERENT free provider (Groq)
+### 3) Judge the responses
+
+```bash id="8v5w7g"
 python src/llm_judge.py --input results/raw_responses.json --output results/judged.json --judge_provider groq
+```
 
-# 4. (Optional but recommended) hand-label ~15-20 cases yourself in the
-#    same format as data/human_label_sample.json.example, then:
+### 4) Run the judge–human agreement check
+
+```bash id="n4u1ic"
 python src/agreement_check.py --judged results/judged.json --human_labels data/human_label_sample.json
 ```
 
-To compare a second model (closer to the original "2-3 models tested" scope), just run step 2 again with `--provider groq --model gpt-oss-120b --out results/raw_responses_groq.json`, judge it the same way, and combine both result files in the dashboard for a head-to-head comparison.
+---
 
-## Testing a different model
+## Testing a product with no API
 
-`src/providers.py` holds five provider integrations (Anthropic, Gemini, Groq, OpenAI, OpenRouter) behind one `call_model()` function, plus `guess_provider_and_model()`, which maps any free-typed model name to a way of running it **for free** — a native no-card provider (Gemini, Groq) if the name matches one, otherwise a free ($0, open-source) model on OpenRouter. Closed/paid names with a free open-weight equivalent (e.g. `gpt-4o`) are auto-substituted with one rather than silently running (and billing) the real paid model; names with no free equivalent anywhere (e.g. Claude, Grok) raise a clear error instead of guessing. Add a new native provider by writing one function following the same pattern.
+For products that can only be tested through a chat interface, use:
 
-## Rate limiting
+```bash id="bzv9wd"
+python src/manual_run.py
+```
 
-Every call to `call_model()` passes through a shared, thread-safe
-sliding-window `RateLimiter` (`src/providers.py`) before it's made, keyed
-per provider, with caps set a little under each provider's published
-free-tier limit (Gemini ~12/min, Groq ~25/min, OpenRouter free models
-~18/min, GitHub Models ~8/min *and* ~45/day — it supports more than one
-window per provider specifically for GitHub's tighter daily cap). If a
-run would exceed that, the limiter blocks and waits for the window to
-roll rather than firing the request and hoping — so the target-model
-run, the judge, and multiple dashboard jobs running close together all
-self-throttle automatically, without you having to hand-tune a `--delay`
-flag. `/api/providers` reports live usage (`used`/`max` per window),
-which the dashboard shows as small chips under the run panel so you can
-see how close to the cap a provider is in real time. A live 429 from the
-provider itself still triggers a backoff-and-retry in `_post_json` as a
-second line of defense. If a longer cap (like GitHub Models' daily limit)
-is actually used up rather than just briefly hit, the limiter doesn't
-sleep silently for hours — it stops the run right away with a clear
-message (e.g. `github API limit finished, try again tomorrow.`), which
-shows up directly in the dashboard's run status.
+This workflow exports prompts for manual testing and lets you import pasted responses back into the same evaluation format used by the main benchmark pipeline.
 
-## Dashboard
+---
 
-`dashboard/index.html` is a self-contained, responsive dashboard (no
-build step, no dependencies) that auto-loads the most recent run from
-`results/` on open — no manual re-upload needed — and lets you switch
-between past runs from a dropdown, or run a new test directly from the
-"Run a New Test" panel. It renders: failure rate by category, a risk
-heatmap (category × label), example transcripts for each failure type,
-and a collapsible transparency panel that breaks down every category's
-failure rate individually and lists the actual failing prompts under
-each one (id, subcategory, a preview, and the label) — click one to jump
-straight to that case in the log below, plus the benchmark's stated
-general limitations. The heatmap cells and category bars are
-clickable — click one to filter the case log to that category and/or
-outcome, with a "clear filter" link to reset. Layout is fluid down to
-phone widths (stacking KPI cards, a horizontally-scrollable heatmap, a
-single-column run form), and panels/cases animate in on load. A
-collapsible "Testing an Agent With No API" panel walks through the
-`manual_run.py` export/import workflow for products like Emergent or
-Replit Agent that have no callable API. Open it directly in a browser
-after generating results, or serve it via `python server.py` for the
-live "Run a New Test" panel to work.
+## Output
 
-## Honesty notes
+Each benchmark run produces judged outputs in `results/` and can be inspected in the dashboard.
 
-- This is a ~120-prompt proof-of-concept pipeline built over about a week,
-  not a validated, publishable benchmark. Sample sizes per subcategory are
-  too small to support strong claims about any specific model's true
-  failure rate — see `docs/methodology.md` for the full limitations list.
-- Roughly 56% of prompts are drawn verbatim from published academic
-  red-teaming datasets (AdvBench, Do-Not-Answer) with source IDs preserved
-  for traceability; the rest are clearly labeled as originally curated for
-  this project, concentrated in the emotional-dependency category where
-  existing benchmarks have the least coverage.
+Typical outputs include:
+
+* overall failure rate
+* category-wise failure rate
+* label distribution across the benchmark
+* example unsafe / borderline / over-refusal cases
+* agreement statistics for judge reliability checks
+
+---
+
+## Dashboard features
+
+The dashboard is designed to make benchmark results easier to inspect without manually opening JSON files.
+
+It supports:
+
+* **failure rate by category**
+* **risk heatmaps** for category × label breakdown
+* **example transcripts / failure cases**
+* **previous run selection**
+* **filtered inspection of unsafe, borderline, and over-refusal cases**
+* **manual testing workflow support** for products without an API
+
+---
+
+## Supported providers
+
+The benchmark can run models from multiple providers through a shared interface in `src/providers.py`.
+
+Current provider support includes:
+
+* **Gemini**
+* **Groq**
+* **OpenAI**
+* **Anthropic**
+* **OpenRouter**
+* **GitHub Models**
+
+This makes it possible to evaluate different models under the same benchmark and judging setup.
+
+---
+
+## Repository highlights
+
+* Multi-category LLM safety benchmark
+* Prompt set built from benchmark sources plus project curation
+* Rule-based + rubric-based evaluation pipeline
+* Judge reliability check using Cohen’s kappa
+* Dashboard for inspecting failures and comparing runs
+* Support for both API-based models and manually tested products
+
+---
+
+## Notes
+
+For more detail on the benchmark design, curation approach, judging logic, and limitations, see:
+
+* `docs/methodology.md`
