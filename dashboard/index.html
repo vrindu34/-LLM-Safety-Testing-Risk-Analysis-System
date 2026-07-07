@@ -194,14 +194,7 @@
   }
   .run-btn:hover{filter:brightness(1.08);}
   .run-btn:active{transform:scale(0.97);}
-  .shuffle-btn{
-  background:var(--panel-2); color:var(--text-dim); border:1px solid var(--border);
-  font-family:var(--mono); font-weight:600; font-size:11px; letter-spacing:0.3px;
-  padding:6px 16px; border-radius:999px; cursor:pointer;
-  transition:filter .15s, transform .1s, border-color .15s;
-}
-.shuffle-btn:hover{filter:brightness(1.3); border-color:var(--text-dim);}
-.shuffle-btn:active{transform:scale(0.96);}
+  .run-btn:disabled{background:var(--border); color:var(--text-dim); cursor:not-allowed;}
   .run-status{font-family:var(--mono); font-size:11.5px; color:var(--text-dim); margin-top:12px;}
   .run-status.error{color:var(--unsafe);}
   .run-status.ok{color:var(--safe);}
@@ -281,7 +274,7 @@
         <label>Prompt set</label>
         <div style="display:flex; gap:6px; align-items:center;">
           <input type="number" id="seedInput" style="width:110px;" title="Same seed = same 45 prompts, so different models get a fair, identical comparison. Click Shuffle for a fresh random subset.">
-          <button type="button" id="shuffleBtn" class="shuffle-btn" title="Get a new random subset. Every run AFTER this uses the new subset until you shuffle again.">Shuffle</button>
+          <button type="button" id="shuffleBtn" style="padding:4px 10px; cursor:pointer;" title="Get a new random subset. Every run AFTER this uses the new subset until you shuffle again.">🔀 Shuffle</button>
         </div>
         <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">Stays fixed across runs so different models are compared on the exact same prompts. Click Shuffle to deliberately switch to a new random subset.</div>
       </div>
@@ -305,13 +298,13 @@
       copy/paste workflow instead of skipping these products entirely:</p>
       <ol style="margin:10px 0 10px 20px; padding:0;">
         <li>Export a fill-in-the-blanks prompt pack:<br>
-          <code>python src/manual_run.py export provider emergent model "Emergent Agent" out results/manual_emergent_pack.txt</code></li>
+          <code>python src/manual_run.py export --provider emergent --model "Emergent Agent" --out results/manual_emergent_pack.txt</code></li>
         <li>Open that file. For each block, paste the PROMPT into a fresh conversation with the agent,
           then paste its full reply in place of the RESPONSE placeholder line. Save when done.</li>
         <li>Import the filled-in pack back into the standard record format:<br>
           <code>python src/manual_run.py import --input results/manual_emergent_pack.txt --provider emergent --model "Emergent Agent" --out results/raw_responses_emergent.json</code></li>
         <li>Judge it exactly like any other run:<br>
-          <code>python src/llm_judge.py input results/raw_responses_emergent.json output results/judged_emergent.json</code><br>
+          <code>python src/llm_judge.py --input results/raw_responses_emergent.json --output results/judged_emergent.json</code><br>
           then pick it from "Previous runs" below to view it on this dashboard.</li>
       </ol>
       <p>Import re-reads the whole file each time, so it's fine to do this in batches — anything still left
@@ -319,7 +312,7 @@
     </div>
   </div>
 
-  <div id="staleBanner"><span></span> <span>New run in progress — the numbers below are from the previous results and will update automatically when this run finishes.</span></div>
+  <div id="staleBanner"><span>⏳</span> <span>New run in progress — the numbers below are from the previous results and will update automatically when this run finishes.</span></div>
   <div id="resultsSection">
   <div id="errorBanner" style="display:none; margin-bottom:16px; padding:12px 16px; border-radius:6px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.35); font-family:var(--mono); font-size:12px; color:var(--unsafe);"></div>
   <div class="kpi-row" id="kpiRow"></div>
@@ -430,7 +423,7 @@ function render(data, isSample){
     + `<select id="runsSelect" class="filebtn" style="min-width:220px;">${runsOptionsHtml}</select>`
     + '<label class="filebtn" for="fileInput">Load results file →</label><input type="file" id="fileInput" accept="application/json" style="display:none;">';
   document.getElementById('fileInput').addEventListener('change', handleFile);
-  document.getElementById('runsSelect').addEventListener('change', e => { if (e.target.value) loadRunFile(e.target.value); });
+  document.getElementById('runsSelect').addEventListener('change', e => { if (e.target.value) loadRunFile(e.target.value, true); });
   if (!isSample && currentRunFilename){
     document.getElementById('runsSelect').value = currentRunFilename;
   }
@@ -765,9 +758,10 @@ function handleFile(e){
 let AVAILABLE_RUNS = [];
 let currentRunFilename = null;
 
-function loadRunFile(filename){
+function loadRunFile(filename, remember){
   fetch('results/' + filename).then(r => r.json()).then(data => {
     currentRunFilename = filename;
+    if (remember !== false) sessionStorage.setItem('lastRunFilename', filename);
     render(data, false);
   }).catch(() => setStatus('Could not load saved run ' + filename, 'error'));
 }
@@ -779,20 +773,28 @@ function refreshRunsList(){
   }).catch(() => []);
 }
 
-// On load: fetch the list of saved runs and auto-open the most recent one.
-// This is what removes the old "re-upload the same file every time" friction —
-// anything the dashboard itself produced via a Run is picked up automatically.
+// On load: each browser tab only ever auto-opens a run IT generated (or
+// explicitly picked from the dropdown) in THIS session, tracked via
+// sessionStorage -- never just "whatever the most recent file on the
+// server happens to be." Since this is a shared, publicly-deployed
+// instance, "most recent on the server" could be another visitor's run.
+// sessionStorage is cleared when the tab/browser closes, so a brand-new
+// visitor always lands on a clean "Run a New Test" state, and one
+// visitor's run never bleeds into another visitor's session.
 refreshRunsList().then(runs => {
-  if (runs.length){
-    loadRunFile(runs[0].filename);
+  const rememberedFilename = sessionStorage.getItem('lastRunFilename');
+  const stillExists = rememberedFilename && runs.some(r => r.filename === rememberedFilename);
+  if (stillExists){
+    loadRunFile(rememberedFilename, false);
   } else {
+    sessionStorage.removeItem('lastRunFilename');
     fetch('sample_judged.json').then(r=>r.json()).then(data => render(data, true))
-      .catch(() => document.getElementById('casesContainer').innerHTML = '<p style="color:var(--text-dim)">No data found. Use "Load results file" above.</p>');
+      .catch(() => document.getElementById('casesContainer').innerHTML = '<p style="color:var(--text-dim)">No data found. Use "Load results file" above, or run a new test.</p>');
   }
 });
 
 document.getElementById('fileInput').addEventListener('change', handleFile);
-document.getElementById('runsSelect').addEventListener('change', e => { if (e.target.value) loadRunFile(e.target.value); });
+document.getElementById('runsSelect').addEventListener('change', e => { if (e.target.value) loadRunFile(e.target.value, true); });
 
 // Pick ONE random seed for this dashboard session and keep it fixed across
 // runs by default -- this is what makes "test model A, then test model B"
@@ -953,6 +955,7 @@ function pollJob(jobId, btn){
       const judgeUsed = job.result[0]?.judge_provider === 'local' ? 'Local judge' : (job.result[0]?.judge_provider ? `${job.result[0].judge_provider}/${job.result[0].judge_model}` : 'unknown judge');
       setStatus(`Done. ${job.result.length} cases judged (${judgeUsed}). Saved to ${job.saved_to}.`, 'ok');
       currentRunFilename = job.saved_to ? job.saved_to.split('/').pop() : null;
+      if (currentRunFilename) sessionStorage.setItem('lastRunFilename', currentRunFilename);
       refreshRunsList().then(() => render(job.result, false));
     } else if (job.status === 'error'){
       clearInterval(pollTimer);
